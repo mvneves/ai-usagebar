@@ -286,16 +286,59 @@ export default class AiUsageBarPrefs extends ExtensionPreferences {
         colors.add(colorRow(settings, 'color-critical', _('Critical (≥90%)')));
         colors.add(colorRow(settings, 'color-empty', _('Empty (bar background)')));
 
-        // ── Data ────────────────────────────────────────────────────────
-        const data = new Adw.PreferencesGroup({title: _('Data')});
-        page.add(data);
+        // ── Refresh ─────────────────────────────────────────────────────
+        // Fresh figures on every click against fewer processes and requests:
+        // users weigh that differently, so each knob is exposed rather than
+        // one cadence chosen for everybody.
+        const refresh = new Adw.PreferencesGroup({
+            title: _('Refresh'),
+            description: _('ai-usagebar reuses each provider’s last answer for 60 s (a custom provider’s cache_ttl_secs); a shorter interval re-reads that cache instead of contacting the provider.'),
+        });
+        page.add(refresh);
 
         const interval = new Adw.SpinRow({
-            title: _('Refresh interval (s)'),
+            title: _('Top bar interval (s)'),
+            subtitle: _('Re-reads the one provider the top bar shows'),
             adjustment: new Gtk.Adjustment({lower: 5, upper: 3600, step_increment: 5, page_increment: 30}),
         });
         settings.bind('refresh-interval', interval, 'value', Gio.SettingsBindFlags.DEFAULT);
-        data.add(interval);
+        refresh.add(interval);
+
+        const menuMode = new Adw.ComboRow({
+            title: _('Menu updates'),
+            subtitle: _('In the background, the menu opens on recent figures; on open, automatic refreshes start only while the menu is open'),
+            model: Gtk.StringList.new([_('In the background'), _('Only when the menu opens')]),
+        });
+        bindCombo(settings, 'menu-refresh-mode', menuMode, ['background', 'on-open']);
+        refresh.add(menuMode);
+
+        const menuInterval = new Adw.SpinRow({
+            title: _('Menu interval (s)'),
+            subtitle: _('Fetches every enabled provider in turn; also applies while the menu is open'),
+            adjustment: new Gtk.Adjustment({lower: 30, upper: 3600, step_increment: 30, page_increment: 300}),
+        });
+        settings.bind('menu-refresh-interval', menuInterval, 'value', Gio.SettingsBindFlags.DEFAULT);
+        refresh.add(menuInterval);
+
+        const maxAge = new Adw.SpinRow({
+            title: _('Refresh on open when older than (s)'),
+            subtitle: _('0 = every time the menu opens'),
+            adjustment: new Gtk.Adjustment({lower: 0, upper: 3600, step_increment: 15, page_increment: 60}),
+        });
+        settings.bind('menu-max-age', maxAge, 'value', Gio.SettingsBindFlags.DEFAULT);
+        refresh.add(maxAge);
+
+        const timeout = new Adw.SpinRow({
+            title: _('Command timeout (s)'),
+            subtitle: _('Raise it when many providers make the menu time out'),
+            adjustment: new Gtk.Adjustment({lower: 10, upper: 600, step_increment: 10, page_increment: 60}),
+        });
+        settings.bind('command-timeout', timeout, 'value', Gio.SettingsBindFlags.DEFAULT);
+        refresh.add(timeout);
+
+        // ── Data ────────────────────────────────────────────────────────
+        const data = new Adw.PreferencesGroup({title: _('Data')});
+        page.add(data);
 
         const vendorList = ['anthropic', 'openai', 'zai', 'openrouter', 'deepseek', 'antigravity'];
         const vendor = new Adw.ComboRow({

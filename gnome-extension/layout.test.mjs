@@ -49,4 +49,9 @@ const busyWrites = source.match(/\bjob\.busy\s*=[^=]/g) ?? [];
 assert.equal(busyWrites.length, 1, 'job.busy must change only through _setBusy');
 assert.match(source, /\n {4}_setBusy\(job, busy\) \{\n {8}job\.busy = busy;/);
 
+// The last report outlives the indicator: GNOME disables extensions at the lock
+// screen, and an indicator rebuilt empty opened onto "Loading…".
+assert.match(source, /this\._memo \?\?= \{/, 'the extension keeps a memo across enable');
+assert.match(source, /new Indicator\([\s\S]{0,160}?this\._memo\);/, 'the indicator receives the memo');
+
 console.log('GNOME layout compatibility tests passed');

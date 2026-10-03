@@ -20,7 +20,8 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {barGeometry, barMarkup, colorForPct, disambiguateTags, field, FIELD, FORMAT, hasUsageWindows, integer,
     isGrouped, MARKER, markerElapsed, plainTextFromPango, selectPools,
     splitFormatOutput} from './marker-logic.js';
-import {commandFailure, errorLine, parseReport, refreshRow, summarize} from './report-model.js';
+import {commandFailure, errorLine, parseReport, refreshRow, reportOutdated,
+    summarize} from './report-model.js';
 
 const ROLE = 'ai-usagebar';
 
@@ -108,7 +109,10 @@ const FG = '#abb2bf';
 const RED = '#e06c75';
 // FORMAT's final ignored literal sentinel receives a stale suffix, keeping the
 // preceding elapsed fields numeric. It and its field indexes live in marker-logic.
-const REFRESH_TIMEOUT_SECS = 60;
+
+// While the menu is open, countdowns and "Updated N ago" are recomputed this
+// often from the report in hand. A local redraw, never a fetch.
+const TICK_SECS = 30;
 
 function esc(s) {
     return String(s)
@@ -189,20 +193,26 @@ class AiUsageBarRefreshItem extends PopupMenu.PopupImageMenuItem {
 
 const Indicator = GObject.registerClass(
 class AiUsageBarIndicator extends PanelMenu.Button {
-    _init(settings, openPrefs, iconDir) {
+    _init(settings, openPrefs, iconDir, memo) {
         super._init(0.0, 'AI Usage Bar', false);
 
         this._settings = settings;
         this._openPrefs = openPrefs;
         this._iconDir = iconDir;
+        // Outlives this indicator; see AiUsageBarExtension.enable.
+        this._memo = memo;
         this._marks = new Map();
         this._data = null;          // parsed snapshot for redraws
-        this._report = null;        // parsed `usage --json` for the menu
-        this._reportAt = null;      // when the menu last received a report
+        this._report = null;        // projected `usage --json` for the menu
+        this._reportRaw = memo.report?.raw ?? null; // last good report, re-projected as time passes
+        this._reportAt = memo.report?.at ?? null;   // when the menu received it
+        this._reportError = '';     // a refresh that failed while older figures stay up
         this._panelError = '';      // why the top bar shows ⚠, shown in the menu
         this._providerItems = new Map();
         this._destroyed = false;
         this._timer = 0;
+        this._reportTimer = 0;
+        this._tickId = 0;
         // The top bar (`--vendor --format`) and the menu (`usage --json`) are
         // separate commands on separate schedules; each gets its own slot.
         this._panelJob = newJob();
@@ -226,6 +236,7 @@ class AiUsageBarIndicator extends PanelMenu.Button {
         panelBox.add_child(this._label);
         this.add_child(panelBox);
 
+        this._reproject();
         this._buildMenu();
 
         // Re-render cached data when any display setting changes (no refetch).
@@ -241,23 +252,40 @@ class AiUsageBarIndicator extends PanelMenu.Button {
 
         this._intervalId = this._settings.connect('changed::refresh-interval',
             () => this._restartTimer());
+        this._reportIds = ['menu-refresh-mode', 'menu-refresh-interval'].map(k =>
+            this._settings.connect(`changed::${k}`, () => this._restartReportTimer()));
         this._sourceIds = [
             this._settings.connect('changed::vendor', () => this._refresh()),
             this._settings.connect('changed::binary-path', () => {
                 this._refresh();
-                this._refreshReport();
+                // A different binary needs its own run, even if the old
+                // binary is still answering. Ordinary refreshes coalesce.
+                this._refreshReport({queueIfBusy: true});
             }),
         ];
 
         this.menu.connect('open-state-changed', (_m, open) => {
-            if (open) {
-                this._refresh();
-                this._refreshReport();
+            if (!open) {
+                this._stopTick();
+                return;
             }
+            // Open onto the report in hand, with countdowns as of now, and
+            // fetch only if it is older than the user asked for.
+            this._tick();
+            this._startTick();
+            this._refresh();
+            if (reportOutdated(this._reportAt, Date.now(), this._settings.get_int('menu-max-age')))
+                this._refreshReport();
         });
 
+        // A top bar from before the indicator was rebuilt (lock screen, panel
+        // move) stands in until the first run answers.
+        const vendor = this._settings.get_string('vendor') || 'anthropic';
+        if (this._memo.panel?.vendor === vendor)
+            this._consume(this._memo.panel.out);
         this._refresh();
         this._restartTimer();
+        this._restartReportTimer();
     }
 
     _buildMenu() {
@@ -285,7 +313,7 @@ class AiUsageBarIndicator extends PanelMenu.Button {
         this.menu.addMenuItem(this._refreshItem);
         this.menu.addAction('Open TUI', () => this._openTui());
         this.menu.addAction('Settings', () => this._openPrefs());
-        this._paintReport(null);
+        this._paintReport();
     }
 
     _message(menu, text, styleClass = 'aiub-detail') {
@@ -399,7 +427,8 @@ class AiUsageBarIndicator extends PanelMenu.Button {
         return item;
     }
 
-    _paintReport(report) {
+    _paintReport() {
+        const report = this._report;
         this._syncRefreshItem();
         const focus = global.stage.get_key_focus();
         let focusedId = null;
@@ -421,6 +450,8 @@ class AiUsageBarIndicator extends PanelMenu.Button {
         this._providers.actor.style = `max-height: ${Math.floor((monitor?.height || 800) * 0.6)}px;`;
         if (this._panelError)
             this._message(this._providers, `Top bar: ${this._panelError}`);
+        if (this._reportError)
+            this._message(this._providers, `Refresh failed: ${this._reportError}`);
         if (!report?.ok) {
             this._message(this._providers, report?.error || 'Loading…');
         } else if (report.entries.length === 0) {
@@ -467,6 +498,7 @@ class AiUsageBarIndicator extends PanelMenu.Button {
             this._syncRefreshItem();
     }
 
+    // The top bar's own schedule: one provider, cheap, frequent.
     _restartTimer() {
         if (this._timer) {
             GLib.source_remove(this._timer);
@@ -475,10 +507,63 @@ class AiUsageBarIndicator extends PanelMenu.Button {
         const secs = Math.max(5, this._settings.get_int('refresh-interval'));
         this._timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, secs, () => {
             this._refresh();
-            if (this.menu.isOpen)
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    // The menu's schedule. `usage --json` visits every enabled provider in
+    // turn, so it is slower than the top bar's run and has its own interval.
+    // In 'background' mode it also runs while the menu is closed, so opening
+    // the menu no longer waits on every provider whose cache has expired.
+    _restartReportTimer() {
+        if (this._reportTimer) {
+            GLib.source_remove(this._reportTimer);
+            this._reportTimer = 0;
+        }
+        const secs = Math.max(30, this._settings.get_int('menu-refresh-interval'));
+        const due = () => this._settings.get_string('menu-refresh-mode') === 'background' ||
+            this.menu.isOpen;
+        this._reportTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, secs, () => {
+            if (due())
                 this._refreshReport();
             return GLib.SOURCE_CONTINUE;
         });
+        // Catch up now rather than one full interval from now: on enable, after
+        // unlock, or when the mode or interval just changed.
+        if (due() && reportOutdated(this._reportAt, Date.now(), secs))
+            this._refreshReport();
+    }
+
+    // Recompute countdowns, pace markers and the status line from the report
+    // in hand. Projection is relative to now, so a held report would otherwise
+    // show the countdowns of the moment it arrived.
+    _reproject() {
+        if (this._reportRaw !== null)
+            this._report = parseReport(this._reportRaw);
+    }
+
+    _tick() {
+        this._reproject();
+        this._paintReport();
+    }
+
+    _startTick() {
+        this._stopTick();
+        this._tickId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, TICK_SECS, () => {
+            this._tick();
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    _stopTick() {
+        if (this._tickId) {
+            GLib.source_remove(this._tickId);
+            this._tickId = 0;
+        }
+    }
+
+    _commandTimeout() {
+        return Math.max(10, Math.min(600, this._settings.get_int('command-timeout')));
     }
 
     // Spawn `argv` in `job`'s slot (see newJob). `handlers.done(out, err, ok)`
@@ -522,7 +607,8 @@ class AiUsageBarIndicator extends PanelMenu.Button {
         job.proc = proc;
 
         let timedOut = false;
-        const timeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, REFRESH_TIMEOUT_SECS, () => {
+        const timeoutSecs = this._commandTimeout();
+        const timeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, timeoutSecs, () => {
             timedOut = true;
             if (job.timeoutId === timeoutId)
                 job.timeoutId = 0;
@@ -532,7 +618,7 @@ class AiUsageBarIndicator extends PanelMenu.Button {
             cancellable.cancel();
             if (job.token === token) {
                 this._setBusy(job, false);
-                handlers.failed('ai-usagebar took too long', `timed out after ${REFRESH_TIMEOUT_SECS}s`);
+                handlers.failed('ai-usagebar took too long', `timed out after ${timeoutSecs}s`);
                 // Do not strand a request that arrived while this one hung.
                 again();
             }
@@ -615,27 +701,55 @@ class AiUsageBarIndicator extends PanelMenu.Button {
                     this._setError('ai-usagebar failed', err);
                     return;
                 }
+                this._memo.panel = {vendor, out};
                 this._consume(out);
             },
         });
     }
 
-    _refreshReport() {
+    _refreshReport({queueIfBusy = false} = {}) {
+        // Open events, timer ticks and manual refreshes share the in-flight
+        // report. Queuing them would fetch again as soon as fresh data arrives,
+        // possibly after an on-open menu has already closed. Only an explicit
+        // source change needs a follow-up run with different arguments.
+        if (this._reportJob.busy && !queueIfBusy)
+            return;
         const argv = [resolveBinary(this._settings), 'usage', '--json'];
         this._run(this._reportJob, argv, {
             again: () => this._refreshReport(),
-            failed: (short, detail) =>
-                this._showReport({ok: false, error: errorLine(short, detail), entries: []}),
-            done: (out, err, ok) =>
-                this._showReport(!out.trim() && !ok ? commandFailure(err) : parseReport(out)),
+            failed: (short, detail) => this._reportFailed(errorLine(short, detail)),
+            done: (out, err, ok) => this._reportArrived(out, err, ok),
         });
     }
 
-    _showReport(report) {
-        if (report.ok)
+    // The command answered. Whatever it said replaces the menu: a report, or
+    // the failure `usage` printed (no providers enabled, a broken config).
+    _reportArrived(out, err, ok) {
+        const report = !out.trim() && !ok ? commandFailure(err) : parseReport(out);
+        this._reportError = '';
+        if (report.ok) {
+            this._reportRaw = out;
             this._reportAt = Date.now();
+            this._memo.report = {raw: out, at: this._reportAt};
+        } else {
+            this._reportRaw = this._reportAt = null;
+            this._memo.report = null;
+        }
         this._report = report;
-        this._paintReport(report);
+        this._paintReport();
+    }
+
+    // The command never answered: it could not start, timed out, or its
+    // output could not be read. Figures already on screen are still the best
+    // available, so they stay, dated by the status line, under the reason.
+    _reportFailed(error) {
+        if (this._report?.ok) {
+            this._reportError = error;
+        } else {
+            this._reportError = '';
+            this._report = {ok: false, error, entries: []};
+        }
+        this._paintReport();
     }
 
     _consume(stdout) {
@@ -650,7 +764,7 @@ class AiUsageBarIndicator extends PanelMenu.Button {
         // longer describes the top bar.
         if (this._panelError) {
             this._panelError = '';
-            this._paintReport(this._report);
+            this._paintReport();
         }
         const raw = plainTextFromPango(data.text);
         const f = splitFormatOutput(raw);
@@ -699,7 +813,7 @@ class AiUsageBarIndicator extends PanelMenu.Button {
     _render() {
         if (this._data)
             this._renderPanel(this._data, this._colors());
-        this._paintReport(this._report);
+        this._paintReport();
     }
 
     _renderPanel(d, colors) {
@@ -793,7 +907,7 @@ class AiUsageBarIndicator extends PanelMenu.Button {
         // The top bar stays a compact ⚠; the reason is the menu's first line.
         this._setPanelMarkup(`<span foreground="${RED}">⚠ ai</span>`);
         this._panelError = errorLine(short, detail);
-        this._paintReport(this._report);
+        this._paintReport();
     }
 
     _openTui() {
@@ -819,19 +933,20 @@ class AiUsageBarIndicator extends PanelMenu.Button {
 
     destroy() {
         this._destroyed = true;
-        if (this._timer) {
-            GLib.source_remove(this._timer);
-            this._timer = 0;
+        for (const id of [this._timer, this._reportTimer, this._tickId]) {
+            if (id)
+                GLib.source_remove(id);
         }
+        this._timer = this._reportTimer = this._tickId = 0;
         this._stop(this._panelJob);
         this._stop(this._reportJob);
         for (const id of this._viewIds ?? [])
             this._settings.disconnect(id);
-        for (const id of this._sourceIds ?? [])
+        for (const id of [...this._sourceIds ?? [], ...this._reportIds ?? []])
             this._settings.disconnect(id);
         if (this._intervalId)
             this._settings.disconnect(this._intervalId);
-        this._viewIds = this._sourceIds = null;
+        this._viewIds = this._sourceIds = this._reportIds = null;
         this._intervalId = 0;
         super.destroy();
     }
@@ -840,6 +955,12 @@ class AiUsageBarIndicator extends PanelMenu.Button {
 export default class AiUsageBarExtension extends Extension {
     enable() {
         this._settings = this.getSettings();
+        // The last top bar and report, kept across disable/enable. GNOME
+        // disables every extension at the lock screen, so without this each
+        // unlock rebuilt the indicator empty and the next click opened onto
+        // "Loading…" until every provider had been fetched again. Plain
+        // strings and a timestamp; nothing here holds a GObject or a signal.
+        this._memo ??= {panel: null, report: null};
         this._place();
         this._placeIds = [
             this._settings.connect('changed::panel-box', () => this._place()),
@@ -854,7 +975,7 @@ export default class AiUsageBarExtension extends Extension {
             delete Main.panel.statusArea[ROLE];
         }
         this._indicator = new Indicator(this._settings, () => this.openPreferences(),
-            this.dir.get_child('icons'));
+            this.dir.get_child('icons'), this._memo);
         const box = this._settings.get_string('panel-box') || 'right';
         const index = Math.max(0, this._settings.get_int('panel-index'));
         Main.panel.addToStatusArea(ROLE, this._indicator, index, box);

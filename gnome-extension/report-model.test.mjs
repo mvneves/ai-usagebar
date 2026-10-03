@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {commandFailure, elapsedPercent, errorLine, finitePercent, formatDuration, formatReset, metricDetail,
-    parseReport, projectEntry, refreshRow, summarize, brandSlug, updatedText} from './report-model.js';
+    parseReport, projectEntry, refreshRow, reportOutdated, summarize, brandSlug, updatedText} from './report-model.js';
 
 const now = Date.parse('2026-09-24T18:00:00Z');
 const labels = rows => rows.map(row => `${row.type}:${row.label}`);
@@ -51,6 +51,34 @@ assert.equal(metricDetail('Resets in 4h 52m', '2026-09-25T00:00:00Z'), '');
 assert.equal(metricDetail('Auto + Composer', '2026-09-25T00:00:00Z'), 'Auto + Composer');
 assert.equal(metricDetail('$4.10 of $20.00 · reset Oct 1', '2026-09-25T00:00:00Z'), '$4.10 of $20.00');
 assert.equal(metricDetail('Resets in 3d', ''), 'Resets in 3d');
+
+// Re-projecting a held report must keep the pacing caption in step with its
+// marker. Usage stays at the last reported value; only elapsed time changes.
+{
+    const metric = {type: 'metric', label: 'Session (5h)', percent: 60,
+        reset_at: '2026-09-24T20:30:00Z', window_secs: 18000,
+        detail: 'Resets in 2h 30m · 50% elapsed · 10pts ahead · pool note'};
+    const raw = JSON.stringify({entries: [{id: 'anthropic', sections: [metric]}]});
+    for (const [minutes, elapsed, pace] of [
+        [0, 50, '10pts ahead'],
+        [30, 60, 'on track'],
+        [60, 70, '10pts under'],
+        [180, 100, '40pts under'],
+    ]) {
+        const row = parseReport(raw, now + minutes * 60000).entries[0].rows[0];
+        assert.equal(row.elapsed, elapsed);
+        assert.equal(row.detail, `${elapsed}% elapsed · ${pace} · pool note`);
+        assert.equal(row.percent, 60, 'local redraws must not invent new usage');
+    }
+    const project = fields => projectEntry({id: 'test', sections: [{...metric, ...fields}]},
+        now + 30 * 60000).rows[0];
+    assert.equal(project({window_secs: undefined}).detail,
+        '50% elapsed · 10pts ahead · pool note', 'no guessed pacing without an exact window');
+    assert.equal(project({detail: 'Resets in 2h 30m · Auto + Composer'}).detail,
+        'Auto + Composer', 'unrelated provider text stays intact');
+    assert.equal(project({detail: 'Resets in 2h 30m'}).detail,
+        '', 'a local redraw must not add pacing to a provider that did not show it');
+}
 
 // Shapes below are what `ai-usagebar usage --json` prints (v1.23), trimmed to
 // the fields the menu reads.
@@ -265,5 +293,13 @@ assert.equal(updatedText(now + 5_000, now), 'Updated just now');
 assert.deepEqual(refreshRow(null, true, now), {label: 'Refreshing…', status: ''});
 assert.deepEqual(refreshRow(now - 120_000, true, now), {label: 'Refreshing…', status: 'Updated 2m ago'});
 assert.deepEqual(refreshRow(now - 120_000, false, now), {label: 'Refresh now', status: 'Updated 2m ago'});
+
+// Opening the menu fetches only what is older than the configured age; with
+// nothing in hand it always fetches, and 0 restores "every open".
+assert.equal(reportOutdated(null, now, 60), true);
+assert.equal(reportOutdated(now - 30_000, now, 60), false);
+assert.equal(reportOutdated(now - 60_000, now, 60), true);
+assert.equal(reportOutdated(now, now, 0), true);
+assert.equal(reportOutdated(now - 30_000, now, 'junk'), true);
 
 console.log('report model tests passed');

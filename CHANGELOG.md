@@ -9,6 +9,18 @@ Each release is also published at
 
 ## [Unreleased]
 
+### Added
+
+- **GNOME: the click menu refreshes on a schedule you choose.** A Refresh group
+  in the extension's preferences sets whether the menu's report refreshes in the
+  background (the default, every 300 s) or only when the menu opens, how old a
+  report may be before opening the menu fetches a new one (60 s), and the
+  command timeout (120 s, previously a fixed 60 s). The menu opens on the last
+  report straight away, says how old it is, and updates its countdowns, pace
+  markers and standard pacing captions together while open.
+  Opening it or a timer tick during a fetch shares that fetch instead of queuing
+  another pass of every provider.
+
 ### Changed
 
 - **GNOME: Refresh now keeps the menu open.** Its icon turns and it reads
@@ -18,6 +30,11 @@ Each release is also published at
 
 ### Fixed
 
+- **GNOME: the menu no longer opens onto `Loading…` after unlocking.** GNOME
+  disables extensions at the lock screen; the extension now keeps its last top
+  bar and report across that cycle instead of starting empty.
+- **GNOME: a refresh that times out no longer empties the menu.** The previous
+  figures stay up under a `Refresh failed: …` line.
 - **GNOME: detail bars fill to their real value.** An expanded provider's bars
   were stretched to the menu's width but drawn against a fixed 280 px, so 100%
   stopped at about 83% and each pace marker sat left of the elapsed share it

@@ -68,7 +68,11 @@ mkdir -p "$DEST" && cp -r * "$DEST"/      # or: ln -s "$PWD" "$DEST"
 | Show 5h / weekly bar | on / on | toggle either window; with nothing left to draw, the top bar shows the vendor's icon |
 | Show percentage | on | numeric `%` next to each bar |
 | Bar width | 8 | cells per bar (4–20) |
-| Refresh interval | 30 s | 5–3600 |
+| Top bar interval | 30 s | 5–3600. Re-reads the top bar's one provider |
+| Menu updates | in the background | `background` keeps the menu's report current while it is closed; `on-open` fetches only when the menu opens and while it stays open |
+| Menu interval | 300 s | 30–3600. The report visits every enabled provider in turn, so it runs less often than the top bar |
+| Refresh on open when older than | 60 s | 0–3600; 0 refreshes on every open |
+| Command timeout | 120 s | 10–600. Raise it when many providers make the report time out |
 | Top bar vendor | `anthropic` | Top bar only. Selectors: Claude, Codex, Z.AI, OpenRouter, DeepSeek, Antigravity. The click menu lists every enabled provider from `usage --json`. |
 | Panel pools | `both` | two-pool vendors only: `both`, first pool, second pool, or `auto` |
 | Auto threshold | 95 % | `auto` switches pools once the shown one reaches this usage |
@@ -93,8 +97,8 @@ with native `St` widgets. Colors mirror the
 binary's default One Dark theme and `severity_for()` thresholds (≥90 red · ≥75
 orange · ≥50 yellow · else green), so it matches the Waybar widget.
 
-The **click menu** runs `ai-usagebar usage --json` when opened and at the
-configured interval while it is open. It lists each report entry in report
+The **click menu** runs `ai-usagebar usage --json` on its own schedule (see
+[Refresh](#refresh)). It lists each report entry in report
 order, including named accounts and custom providers. Each collapsed row
 previews up to two metrics in report order, retaining their labels and group
 headings. `+N more` indicates additional metrics available when expanded.
@@ -114,10 +118,9 @@ as session or weekly windows.
 The menu uses GNOME's submenu navigation and theme, with the existing
 **Refresh now**, **Open TUI**, and **Settings** actions below the provider list.
 Refresh now updates the panel and report **with the menu still open**: its icon
-turns and it reads `Refreshing…` until the report arrives, and the row beside
-it says how old the figures are (`Updated 3m ago`). Periodic updates preserve
-expanded providers and keyboard focus. The top bar's command failures appear
-above the provider list.
+turns and it reads `Refreshing…` until the report arrives. Periodic updates
+preserve expanded providers and keyboard focus. The top bar's command failures
+appear above the provider list.
 
 **Menu appearance** in preferences controls mini bars, icons and spacing
 independently of the top bar. Changes apply immediately and preserve focus
@@ -134,6 +137,39 @@ which Rust supplies for windows of an exact length. Without both, it draws no
 marker. Menu fills use the report's severity; countdowns use the absolute
 reset time. The panel's final `__aiub_end__` literal receives any stale suffix
 so that the preceding elapsed field remains numeric.
+
+### Refresh
+
+The two commands keep separate schedules because they cost different amounts:
+the top bar reads one provider, the report reads every enabled provider one
+after another, and each provider whose cache has expired is a network
+request. The binary keeps a provider's answer for 60 s (a `[[custom]]`
+provider's own `cache_ttl_secs`), so an interval shorter than that re-reads
+the cache.
+
+- **In the background** (default), the report refreshes every *Menu interval*
+  whether or not the menu is open, so a click opens onto recent figures.
+- **Only when the menu opens** starts no automatic fetches while the menu is
+  closed. Opening it shows the last report straight away and fetches a new one
+  if it is older than *Refresh on open when older than*.
+
+Opening the menu or reaching a timer tick during a fetch shares that fetch;
+neither queues another pass. Closing the menu lets an in-flight fetch finish.
+Changing the binary path explicitly requests a report from the new binary,
+even if that must wait for the current run to finish.
+
+Either way, the menu never waits empty for a report it already has. The row
+beside **Refresh now** says how old the figures are (`Updated 3m ago`), and
+countdowns, pace markers and standard pacing captions update together every
+30 s while the menu is open without a fetch. Usage stays at its last reported
+value. A refresh
+that cannot finish (a timeout, a binary that will not start) leaves the last
+figures in place under a `Refresh failed: …` line. A report that comes back
+with its own error, such as no providers enabled, replaces them.
+
+GNOME disables every extension at the lock screen and enables it again on
+unlock. The extension keeps the last top bar and report across that cycle, so
+the first click after unlocking does not open onto `Loading…`.
 
 Both subprocesses are spawned **asynchronously** (`Gio.Subprocess` +
 `communicate_utf8_async`) so it never blocks the shell, and all timers /

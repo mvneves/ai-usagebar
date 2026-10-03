@@ -7,6 +7,37 @@
       <default>30</default>
       <range min="5" max="3600"/>
       <summary>Refresh interval in seconds</summary>
+      <description>How often the top bar re-reads its one provider.</description>
+    </key>
+
+    <key name="menu-refresh-mode" type="s">
+      <choices>
+        <choice value="background"/>
+        <choice value="on-open"/>
+      </choices>
+      <default>'background'</default>
+      <summary>When the menu's report is fetched</summary>
+      <description>'background' keeps the report current while the menu is closed, so it opens on recent figures. 'on-open' starts automatic fetches only when the menu opens and while it stays open; an in-flight fetch can finish after closing.</description>
+    </key>
+
+    <key name="menu-refresh-interval" type="i">
+      <default>300</default>
+      <range min="30" max="3600"/>
+      <summary>Menu report interval in seconds</summary>
+      <description>The report fetches every enabled provider in turn, so it runs less often than the top bar. Used in the background, and while the menu is open.</description>
+    </key>
+
+    <key name="menu-max-age" type="i">
+      <default>60</default>
+      <range min="0" max="3600"/>
+      <summary>Refresh on open when the report is older than this many seconds</summary>
+      <description>0 refreshes on every open.</description>
+    </key>
+
+    <key name="command-timeout" type="i">
+      <default>120</default>
+      <range min="10" max="600"/>
+      <summary>Seconds before an ai-usagebar run is abandoned</summary>
     </key>
 
     <key name="vendor" type="s">
