@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 
-const source = readFileSync(new URL('./extension.js', import.meta.url), 'utf8');
+// A Windows checkout with core.autocrlf has CRLF endings; the contract regexes
+// are written against LF.
+const source = readFileSync(new URL('./extension.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const helper = source.match(/\r?\nfunction verticalBox\([^)]*\) \{\r?\n[\s\S]*?\r?\n\}\r?\n/);
 assert.ok(helper, 'vertical layouts must handle both Shell property names');
 assert.doesNotMatch(source.replace(helper[0], ''), /\b(?:orientation|vertical)\s*:/);
