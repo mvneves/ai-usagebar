@@ -11,6 +11,10 @@ Each release is also published at
 
 ### Fixed
 
+- **GNOME: detail bars fill to their real value.** An expanded provider's bars
+  were stretched to the menu's width but drawn against a fixed 280 px, so 100%
+  stopped at about 83% and each pace marker sat left of the elapsed share it
+  marks.
 - **GNOME: three preference labels were still in Portuguese** after the English
   pass: the extra-usage subtitle, the pools title and the Antigravity status.
 
