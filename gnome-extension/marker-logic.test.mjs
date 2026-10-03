@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {barMarkup, colorForDelta, disambiguateTags, field, FIELD, FORMAT, hasUsageWindows, integer,
+import {barGeometry, barMarkup, colorForDelta, disambiguateTags, field, FIELD, FORMAT, hasUsageWindows, integer,
     isGrouped, markerElapsed, pickPool, plainTextFromPango, poolAvailable, poolTag,
     selectPools, splitFormatOutput} from './marker-logic.js';
 
@@ -132,5 +132,17 @@ for (const [pct, elapsed, expected] of [[25, 50, 'low'], [50, 50, 'mid'], [75, 5
 assert.equal(visibleCells(barMarkup(50, 8, colors, 0)).length, 8);
 assert.equal(visibleCells(barMarkup(50, 8, colors, 100)).length, 8);
 assert.ok(!barMarkup(50, 8, colors, markerElapsed('—', 0)).includes('│'));
+
+// Native bars scale to the width they were allocated. A detail bar asks for
+// 280px and is stretched to the menu's width; measured against 280px, 100%
+// stopped at 83% of a 338px track and the pace marker sat left of its share.
+assert.deepEqual(barGeometry(338, 6, 100, null), {fill: 338, marker: null});
+assert.deepEqual(barGeometry(338, 6, 42, 57), {fill: 142, marker: 192});
+assert.deepEqual(barGeometry(280, 6, 42, 57), {fill: 118, marker: 159});
+assert.equal(barGeometry(338, 6, 1, null).fill, 6, 'a sliver stays visible');
+assert.equal(barGeometry(338, 6, 0, null).fill, 0);
+assert.equal(barGeometry(338, 6, 50, 0).marker, 0);
+assert.equal(barGeometry(338, 6, 50, 100).marker, 336, 'the marker stays inside the track');
+assert.deepEqual(barGeometry(0, 6, 50, 50), {fill: 0, marker: null}, 'an unallocated track draws nothing');
 
 console.log('marker logic tests passed');

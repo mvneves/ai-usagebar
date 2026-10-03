@@ -17,10 +17,10 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
-import {barMarkup, colorForPct, disambiguateTags, field, FIELD, FORMAT, hasUsageWindows, integer,
+import {barGeometry, barMarkup, colorForPct, disambiguateTags, field, FIELD, FORMAT, hasUsageWindows, integer,
     isGrouped, MARKER, markerElapsed, plainTextFromPango, selectPools,
     splitFormatOutput} from './marker-logic.js';
-import {commandFailure, errorLine, parseReport, summarize} from './report-model.js';
+import {commandFailure, errorLine, parseReport, refreshRow, summarize} from './report-model.js';
 
 const ROLE = 'ai-usagebar';
 
@@ -53,31 +53,53 @@ const DETAIL_BAR_W = 280;
 
 // A bar built from St widgets rather than █ cells: a track, a fill in the
 // severity color, and an optional pace marker at the elapsed share of the
-// window.
-function barWidget(percent, width, height, color, elapsed) {
-    const track = new St.Widget({
-        style_class: 'aiub-track',
-        width,
-        height,
-        y_align: Clutter.ActorAlign.CENTER,
-    });
-    if (percent > 0) {
-        track.add_child(new St.Widget({
-            width: Math.max(height, Math.round(width * percent / 100)),
+// window. `width` is what the bar asks for, not what it gets: a detail bar
+// sits in a vertical box that stretches it to the menu's width. The fill and
+// marker are therefore placed from the allocation; measured against the
+// requested width, 100% drew as 83% and every marker sat left of its share.
+const BarTrack = GObject.registerClass(
+class AiUsageBarTrack extends St.Widget {
+    _init(percent, width, height, color, elapsed) {
+        super._init({
+            style_class: 'aiub-track',
+            width,
             height,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._percent = percent;
+        this._elapsed = elapsed;
+        this._fill = new St.Widget({
             style: `background-color: ${color}; border-radius: ${height / 2}px;`,
-        }));
-    }
-    if (Number.isFinite(elapsed)) {
-        track.add_child(new St.Widget({
-            x: Math.min(width - 2, Math.max(0, Math.round(width * elapsed / 100) - 1)),
-            y: -3,
-            width: 2,
-            height: height + 6,
+            visible: percent > 0,
+        });
+        this.add_child(this._fill);
+        this._marker = new St.Widget({
             style: `background-color: ${MARKER}; border-radius: 1px;`,
-        }));
+            visible: Number.isFinite(elapsed),
+        });
+        this.add_child(this._marker);
     }
-    return track;
+
+    vfunc_allocate(box) {
+        this.set_allocation(box);
+        const height = box.get_height();
+        const at = barGeometry(box.get_width(), height, this._percent, this._elapsed);
+        this._fill.allocate(actorBox(0, 0, at.fill, height));
+        // The marker overhangs the track by 3px each way, as before.
+        if (at.marker !== null)
+            this._marker.allocate(actorBox(at.marker, -3, 2, height + 6));
+    }
+});
+
+function actorBox(x, y, width, height) {
+    const box = new Clutter.ActorBox();
+    box.set_origin(x, y);
+    box.set_size(width, height);
+    return box;
+}
+
+function barWidget(percent, width, height, color, elapsed) {
+    return new BarTrack(percent, width, height, color, elapsed);
 }
 
 // Fixed accent colors (tags / dim text). Bar colors are user-configurable.
@@ -115,6 +137,56 @@ function resolveBinary(settings) {
     return 'ai-usagebar';
 }
 
+// "Refresh now" runs in place. A plain menu action closes the menu, so the
+// user had to reopen it to see whether the refresh did anything at all.
+const RefreshItem = GObject.registerClass(
+class AiUsageBarRefreshItem extends PopupMenu.PopupImageMenuItem {
+    _init(onActivate) {
+        super._init('Refresh now', 'view-refresh-symbolic');
+        this._onActivate = onActivate;
+        this._spinning = false;
+        this.label.x_expand = true;
+        this._status = new St.Label({
+            style_class: 'aiub-refresh-status',
+            y_align: Clutter.ActorAlign.CENTER,
+            opacity: 170,
+        });
+        this.add_child(this._status);
+        this._icon.set_pivot_point(0.5, 0.5);
+    }
+
+    // PopupBaseMenuItem.activate emits 'activate', which the menu answers by
+    // closing. Not emitting it is the whole difference from addAction.
+    activate(_event) {
+        this._onActivate();
+    }
+
+    setState(label, status, busy) {
+        this.label.text = label;
+        this._status.text = status;
+        this._status.visible = status !== '';
+        this.accessible_name = status ? `${label}. ${status}` : label;
+        // An animation does not run while the menu is closed; resync on
+        // open restarts it. `ease` jumps to the end when animations are off,
+        // and the label still says "Refreshing…".
+        if (busy === this._spinning && (!busy || this._icon.get_transition('rotation-angle-z')))
+            return;
+        this._spinning = busy;
+        this._icon.remove_all_transitions();
+        this._icon.rotation_angle_z = 0;
+        // ease_property, not ease: ease() derives the transition name with a
+        // single-underscore replace, so `rotation_angle_z` would never get its
+        // repeat count and the icon would turn once.
+        if (busy) {
+            this._icon.ease_property('rotation-angle-z', 360, {
+                duration: 1000,
+                mode: Clutter.AnimationMode.LINEAR,
+                repeatCount: -1,
+            });
+        }
+    }
+});
+
 const Indicator = GObject.registerClass(
 class AiUsageBarIndicator extends PanelMenu.Button {
     _init(settings, openPrefs, iconDir) {
@@ -126,6 +198,7 @@ class AiUsageBarIndicator extends PanelMenu.Button {
         this._marks = new Map();
         this._data = null;          // parsed snapshot for redraws
         this._report = null;        // parsed `usage --json` for the menu
+        this._reportAt = null;      // when the menu last received a report
         this._panelError = '';      // why the top bar shows ⚠, shown in the menu
         this._providerItems = new Map();
         this._destroyed = false;
@@ -201,10 +274,15 @@ class AiUsageBarIndicator extends PanelMenu.Button {
         this._providers.actor._delegate = this._providers;
         this.menu.addMenuItem(this._providers);
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this.menu.addAction('Refresh now', () => {
+        this._refreshItem = new RefreshItem(() => {
+            // Already running: another request would only queue a second
+            // full pass behind it.
+            if (this._reportJob.busy)
+                return;
             this._refresh();
             this._refreshReport();
         });
+        this.menu.addMenuItem(this._refreshItem);
         this.menu.addAction('Open TUI', () => this._openTui());
         this.menu.addAction('Settings', () => this._openPrefs());
         this._paintReport(null);
@@ -322,6 +400,7 @@ class AiUsageBarIndicator extends PanelMenu.Button {
     }
 
     _paintReport(report) {
+        this._syncRefreshItem();
         const focus = global.stage.get_key_focus();
         let focusedId = null;
         let openId = null;
@@ -372,6 +451,22 @@ class AiUsageBarIndicator extends PanelMenu.Button {
         };
     }
 
+    _syncRefreshItem() {
+        if (!this._refreshItem)
+            return;
+        const busy = this._reportJob.busy;
+        const row = refreshRow(this._reportAt, busy, Date.now());
+        this._refreshItem.setState(row.label, row.status, busy);
+    }
+
+    // Every change to `busy` goes through here, so the refresh row always says
+    // whether the report is being fetched.
+    _setBusy(job, busy) {
+        job.busy = busy;
+        if (job === this._reportJob)
+            this._syncRefreshItem();
+    }
+
     _restartTimer() {
         if (this._timer) {
             GLib.source_remove(this._timer);
@@ -397,7 +492,7 @@ class AiUsageBarIndicator extends PanelMenu.Button {
             job.pending = true;
             return;
         }
-        job.busy = true;
+        this._setBusy(job, true);
         const token = ++job.token;
         const cancellable = new Gio.Cancellable();
         job.cancellable = cancellable;
@@ -418,7 +513,7 @@ class AiUsageBarIndicator extends PanelMenu.Button {
             });
             proc.init(cancellable);
         } catch (e) {
-            job.busy = false;
+            this._setBusy(job, false);
             job.cancellable = null;
             job.pending = false;
             handlers.failed(`could not run "${argv[0]}"`, String(e));
@@ -436,7 +531,7 @@ class AiUsageBarIndicator extends PanelMenu.Button {
             } catch (e) {}
             cancellable.cancel();
             if (job.token === token) {
-                job.busy = false;
+                this._setBusy(job, false);
                 handlers.failed('ai-usagebar took too long', `timed out after ${REFRESH_TIMEOUT_SECS}s`);
                 // Do not strand a request that arrived while this one hung.
                 again();
@@ -461,7 +556,7 @@ class AiUsageBarIndicator extends PanelMenu.Button {
             // whatever was selected when it started.
             const current = job.token === token && !this._destroyed;
             if (current)
-                job.busy = false;
+                this._setBusy(job, false);
             try {
                 const [, out, err] = p.communicate_utf8_finish(res);
                 cleanup();
@@ -537,6 +632,8 @@ class AiUsageBarIndicator extends PanelMenu.Button {
     }
 
     _showReport(report) {
+        if (report.ok)
+            this._reportAt = Date.now();
         this._report = report;
         this._paintReport(report);
     }

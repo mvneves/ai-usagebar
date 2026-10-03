@@ -9,6 +9,13 @@ Each release is also published at
 
 ## [Unreleased]
 
+### Changed
+
+- **GNOME: Refresh now keeps the menu open.** Its icon turns and it reads
+  `Refreshing…` until the report arrives, then `Updated just now`. It used to
+  close the menu like any other action, so the result could only be seen by
+  opening it again.
+
 ### Fixed
 
 - **GNOME: detail bars fill to their real value.** An expanded provider's bars

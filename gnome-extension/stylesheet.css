@@ -64,3 +64,10 @@
     background-color: rgba(128, 128, 128, 0.3);
     border-radius: 3px;
 }
+
+/* "Updated 3m ago" beside Refresh now: secondary, in the theme's own colour. */
+.aiub-refresh-status {
+    font-size: 0.85em;
+    font-feature-settings: "tnum";
+    padding-left: 12px;
+}

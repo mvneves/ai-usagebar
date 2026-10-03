@@ -191,3 +191,15 @@ export function barMarkup(pct, width, colors, elapsed) {
         `<span foreground="${over}">${'█'.repeat(postFilled)}</span>` +
         `<span foreground="${colors.empty}">${'░'.repeat(postEmpty)}</span>`;
 }
+
+// Where a native bar's fill ends and its 2px pace marker starts, for the width
+// the track was actually given. A fill is never thinner than the bar is tall,
+// so a small nonzero value still shows as a dot.
+export function barGeometry(width, height, percent, elapsed) {
+    const w = Math.max(0, Math.round(Number(width) || 0));
+    return {
+        fill: percent > 0 ? Math.min(w, Math.max(height, Math.round(w * percent / 100))) : 0,
+        marker: Number.isFinite(elapsed) && w >= 2
+            ? Math.min(w - 2, Math.max(0, Math.round(w * elapsed / 100) - 1)) : null,
+    };
+}

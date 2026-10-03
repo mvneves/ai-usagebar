@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {commandFailure, elapsedPercent, errorLine, finitePercent, formatDuration, formatReset, metricDetail,
-    parseReport, projectEntry, summarize, brandSlug} from './report-model.js';
+    parseReport, projectEntry, refreshRow, summarize, brandSlug, updatedText} from './report-model.js';
 
 const now = Date.parse('2026-09-24T18:00:00Z');
 const labels = rows => rows.map(row => `${row.type}:${row.label}`);
@@ -254,5 +254,16 @@ assert.equal(brandSlug(undefined, 'anthropic@work'), 'anthropic');
 assert.equal(brandSlug('', 'custom:future'), '');
 assert.equal(brandSlug('../../etc/passwd', 'anthropic'), '');
 assert.equal(brandSlug('UPPERCASE', 'x'), '');
+
+// The status line beside "Refresh now": nothing before the first report, then
+// the menu's own age, and the action itself says when a refresh is running.
+assert.equal(updatedText(null, now), '');
+assert.equal(updatedText(now - 59_000, now), 'Updated just now');
+assert.equal(updatedText(now - 3 * 60_000, now), 'Updated 3m ago');
+assert.equal(updatedText(now - 26 * 3_600_000, now), 'Updated 1d 2h ago');
+assert.equal(updatedText(now + 5_000, now), 'Updated just now');
+assert.deepEqual(refreshRow(null, true, now), {label: 'Refreshing…', status: ''});
+assert.deepEqual(refreshRow(now - 120_000, true, now), {label: 'Refreshing…', status: 'Updated 2m ago'});
+assert.deepEqual(refreshRow(now - 120_000, false, now), {label: 'Refresh now', status: 'Updated 2m ago'});
 
 console.log('report model tests passed');

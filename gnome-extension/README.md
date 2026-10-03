@@ -113,9 +113,11 @@ as session or weekly windows.
 
 The menu uses GNOME's submenu navigation and theme, with the existing
 **Refresh now**, **Open TUI**, and **Settings** actions below the provider list.
-Refresh updates the panel and report and closes the menu like a normal menu
-action. Periodic updates preserve expanded providers and keyboard focus.
-The top bar's command failures appear above the provider list.
+Refresh now updates the panel and report **with the menu still open**: its icon
+turns and it reads `Refreshing…` until the report arrives, and the row beside
+it says how old the figures are (`Updated 3m ago`). Periodic updates preserve
+expanded providers and keyboard focus. The top bar's command failures appear
+above the provider list.
 
 **Menu appearance** in preferences controls mini bars, icons and spacing
 independently of the top bar. Changes apply immediately and preserve focus
