@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+### Fixed
+
+- **GNOME: detail bars fill to their real value.** An expanded provider's bars
+  were stretched to the menu's width but drawn against a fixed 280 px, so 100%
+  stopped at about 83% and each pace marker sat left of the elapsed share it
+  marks.
+
 ## [1.39.0] — 2026-10-16
 
 ### Added
