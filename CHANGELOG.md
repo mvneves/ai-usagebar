@@ -9,6 +9,11 @@ Each release is also published at
 
 ## [Unreleased]
 
+### Fixed
+
+- **GNOME: three preference labels were still in Portuguese** after the English
+  pass: the extra-usage subtitle, the pools title and the Antigravity status.
+
 ## [1.31.0] — 2026-10-03
 
 ### Added

@@ -208,7 +208,7 @@ export default class AiUsageBarPrefs extends ExtensionPreferences {
 
         const showExtra = new Adw.SwitchRow({
             title: _('Show extra usage bar (3rd)'),
-            subtitle: _('o custo extra ($) como terceira barra'),
+            subtitle: _('the extra cost ($) as a third bar'),
         });
         settings.bind('show-extra', showExtra, 'active', Gio.SettingsBindFlags.DEFAULT);
         display.add(showExtra);
@@ -218,7 +218,7 @@ export default class AiUsageBarPrefs extends ExtensionPreferences {
         const poolLabels = [_('Both'), _('First only'), _('Second only'), _('Automatic')];
         const poolValues = ['both', 'primary', 'secondary', 'auto'];
         const pools = new Adw.ComboRow({
-            title: _('Pools no painel'),
+            title: _('Pools in the top bar'),
             subtitle: GLib.markup_escape_text(_('for providers with two independent pools (e.g. Antigravity: Gemini and Claude & GPT OSS)'), -1),
             model: Gtk.StringList.new(poolLabels),
         });
@@ -363,7 +363,7 @@ export default class AiUsageBarPrefs extends ExtensionPreferences {
                     row.subtitle = _('checking…');
                     checkCliInstalled(v.cli, (installed) => {
                         if (productDetected) {
-                            row.subtitle = _('✓ Antigravity detectado — mantenha o app, IDE ou agy aberto');
+                            row.subtitle = _('✓ Antigravity detected — keep the app, IDE or agy open');
                         } else if (installed) {
                             row.subtitle = _('agy installed — open a session to make the quota available');
                         } else {
