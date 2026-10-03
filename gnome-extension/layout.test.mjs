@@ -56,4 +56,21 @@ assert.doesNotMatch(source, /this\._icon\.gicon\s*=/,
 assert.match(source, /this\._icon\.icon_name = 'application-x-executable-symbolic'/,
     'the no-mark fallback icon stays');
 
+// Native bars are placed from their allocation. A detail bar is stretched past
+// the width it asks for, so geometry from the requested width drew 100% short.
+assert.doesNotMatch(source, /\bwidth \* (?:percent|elapsed) \/ 100/, 'bar geometry goes through barGeometry');
+assert.match(source, /class AiUsageBarTrack extends St\.Widget[\s\S]*?vfunc_allocate\(box\) \{[\s\S]*?barGeometry\(box\.get_width\(\)/);
+
+// "Refresh now" keeps the menu open. A menu action closes it, and so does an
+// item whose activate() emits 'activate', which is what PopupMenu listens for.
+assert.doesNotMatch(source, /addAction\(\s*'Refresh now'/, 'Refresh now must not be a closing menu action');
+const refreshActivate = source.match(/class AiUsageBarRefreshItem[\s\S]*?\n {4}activate\(_event\) \{\n([\s\S]*?)\n {4}\}/);
+assert.ok(refreshActivate, 'the refresh item overrides activate');
+assert.doesNotMatch(refreshActivate[1], /emit\(|super\.activate/);
+
+// The refresh row reports progress only if every busy change reaches it.
+const busyWrites = source.match(/\bjob\.busy\s*=[^=]/g) ?? [];
+assert.equal(busyWrites.length, 1, 'job.busy must change only through _setBusy');
+assert.match(source, /\n {4}_setBusy\(job, busy\) \{\n {8}job\.busy = busy;/);
+
 console.log('GNOME layout compatibility tests passed');

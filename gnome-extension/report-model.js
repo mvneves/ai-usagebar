@@ -229,3 +229,20 @@ export function parseReport(raw, nowMs = Date.now()) {
         return {ok: false, error: 'The usage report did not contain a valid provider entry.', entries: []};
     return {ok: true, error: '', entries};
 }
+
+// When the menu last received a report, as the status line says it. The age is
+// the menu's own: an entry the binary served from cache is marked `cached`.
+export function updatedText(updatedMs, nowMs) {
+    if (!Number.isFinite(updatedMs))
+        return '';
+    const age = Math.max(0, Number(nowMs) - updatedMs);
+    return age < 60000 ? 'Updated just now' : `Updated ${formatDuration(age)} ago`;
+}
+
+// The "Refresh now" row: what the action says, and the status beside it.
+export function refreshRow(updatedMs, busy, nowMs) {
+    return {
+        label: busy ? 'Refreshing…' : 'Refresh now',
+        status: updatedText(updatedMs, nowMs),
+    };
+}
