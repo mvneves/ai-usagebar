@@ -35,6 +35,14 @@
   stopped at about 83% and each pace marker sat left of the elapsed share it
   marks.
 
+- **GNOME: opening a provider no longer shakes the menu.** While its details
+  expanded, the provider list's scrollbar appeared and disappeared from frame to
+  frame, and the column it reserved narrowed every row each time, so text
+  shifted and bars changed length. The scrollbar now sits in a narrow gutter
+  the list always keeps, appears only when the list overflows, and never
+  changes the rows' width; the list also keeps to its maximum height while a
+  provider expands instead of growing past it and snapping back.
+
 ## [1.39.0] — 2026-10-16
 
 ### Added

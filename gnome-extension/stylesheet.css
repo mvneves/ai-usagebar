@@ -10,6 +10,12 @@
     width: 380px;
 }
 
+/* The gutter the overlay scrollbar is drawn in, kept whether or not the list
+   scrolls so that the scrollbar never changes the rows' width. */
+.aiub-providers-list {
+    padding-right: 8px;
+}
+
 .aiub-provider-content {
     spacing: 6px;
 }

@@ -217,6 +217,7 @@ class AiUsageBarIndicator extends PanelMenu.Button {
         this._timer = 0;
         this._reportTimer = 0;
         this._tickId = 0;
+        this._settleId = 0;
         // The top bar (`--vendor --format`) and the menu (`usage --json`) are
         // separate commands on separate schedules; each gets its own slot.
         this._panelJob = newJob();
@@ -306,12 +307,18 @@ class AiUsageBarIndicator extends PanelMenu.Button {
         this._providers = new PopupMenu.PopupMenuSection();
         // Keep the section's box and menu relationships; wrap only its actor
         // so a long provider list can scroll as well as an expanded submenu.
+        // The vertical scrollbar is switched by _syncScrollbar, not left on
+        // AUTOMATIC. It overlays the list, inside a gutter the list always
+        // keeps for it, so showing it never changes the rows' width.
         this._providers.actor = new St.ScrollView({
             style_class: 'aiub-providers',
             hscrollbar_policy: St.PolicyType.NEVER,
-            vscrollbar_policy: St.PolicyType.AUTOMATIC,
+            vscrollbar_policy: St.PolicyType.EXTERNAL,
+            overlay_scrollbars: true,
             child: this._providers.box,
         });
+        this._providers.box.add_style_class_name('aiub-providers-list');
+        this._providersMax = 0;
         this._providers.actor._delegate = this._providers;
         this.menu.addMenuItem(this._providers);
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -380,6 +387,7 @@ class AiUsageBarIndicator extends PanelMenu.Button {
         const title = entry.title + (entry.plan ? ` · ${entry.plan}` : '') + status;
         const icons = this._settings.get_boolean('menu-show-icons');
         const item = new PopupMenu.PopupSubMenuMenuItem(title, icons);
+        item.menu.connect('open-state-changed', () => this._holdScrollbar());
         item.add_style_class_name('aiub-provider');
         if (this._settings.get_boolean('menu-compact'))
             item.add_style_class_name('aiub-compact');
@@ -460,7 +468,8 @@ class AiUsageBarIndicator extends PanelMenu.Button {
         this._providers.removeAll();
         this._providerItems.clear();
         const monitor = Main.layoutManager.findMonitorForActor(this) || Main.layoutManager.primaryMonitor;
-        this._providers.actor.style = `max-height: ${Math.floor((monitor?.height || 800) * 0.6)}px;`;
+        this._providersMax = Math.floor((monitor?.height || 800) * 0.6);
+        this._providers.actor.style = `max-height: ${this._providersMax}px;`;
         if (this._panelError)
             this._message(this._providers, `Top bar: ${this._panelError}`);
         if (this._reportError)
@@ -481,6 +490,7 @@ class AiUsageBarIndicator extends PanelMenu.Button {
         }
         if (focusedId !== null)
             this._providerItems.get(focusedId)?.grab_key_focus();
+        this._syncScrollbar();
         adjustment.value = scroll;
     }
 
@@ -575,6 +585,36 @@ class AiUsageBarIndicator extends PanelMenu.Button {
     _tick() {
         this._reproject();
         this._paintReport();
+    }
+
+    // Left on AUTOMATIC, the provider list re-decided on every frame of a
+    // submenu's height animation whether it overflowed, and the answer flipped
+    // back and forth even when the list fit; each flip added or removed the
+    // scrollbar's column and moved every row. So the scrollbar overlays a
+    // gutter the list always keeps, and is decided once a submenu has finished
+    // opening or closing. EXTERNAL, not NEVER, when the list fits: a NEVER
+    // list ignores its max-height, so it grew past the limit while a submenu
+    // expanded and snapped back once the scrollbar arrived.
+    _holdScrollbar() {
+        // Tearing the menu down closes an open submenu after destroy() has
+        // already cleared the timers.
+        if (this._destroyed)
+            return;
+        if (this._settleId)
+            GLib.source_remove(this._settleId);
+        // PopupSubMenu eases its height for 250ms.
+        this._settleId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
+            this._settleId = 0;
+            this._syncScrollbar();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _syncScrollbar() {
+        const view = this._providers.actor;
+        const [, height] = this._providers.box.get_preferred_height(view.width > 0 ? view.width : -1);
+        view.vscrollbar_policy = this._providersMax > 0 && height > this._providersMax
+            ? St.PolicyType.ALWAYS : St.PolicyType.EXTERNAL;
     }
 
     _startTick() {
@@ -969,11 +1009,11 @@ class AiUsageBarIndicator extends PanelMenu.Button {
 
     destroy() {
         this._destroyed = true;
-        for (const id of [this._timer, this._reportTimer, this._tickId]) {
+        for (const id of [this._timer, this._reportTimer, this._tickId, this._settleId]) {
             if (id)
                 GLib.source_remove(id);
         }
-        this._timer = this._reportTimer = this._tickId = 0;
+        this._timer = this._reportTimer = this._tickId = this._settleId = 0;
         this._stop(this._panelJob);
         this._stop(this._reportJob);
         for (const id of this._viewIds ?? [])

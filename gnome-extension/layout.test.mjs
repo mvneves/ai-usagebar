@@ -61,6 +61,25 @@ assert.match(source, /this\._icon\.icon_name = 'application-x-executable-symboli
 assert.doesNotMatch(source, /\bwidth \* (?:percent|elapsed) \/ 100/, 'bar geometry goes through barGeometry');
 assert.match(source, /class AiUsageBarTrack extends St\.Widget[\s\S]*?vfunc_allocate\(box\) \{[\s\S]*?barGeometry\(box\.get_width\(\)/);
 
+// Opening a provider shook the menu: while the submenu's height eased, an
+// AUTOMATIC scrollbar came and went, and its column narrowed every row each
+// time. The scrollbar now overlays a gutter the list always keeps, and is
+// switched from the list's settled height, never by St on its own.
+const providers = source.match(/this\._providers\.actor = new St\.ScrollView\(\{([\s\S]*?)\}\);/);
+assert.ok(providers, 'the provider list is a scroll view');
+assert.match(providers[1], /overlay_scrollbars: true/, 'showing the scrollbar must not narrow the rows');
+const css = readFileSync(new URL('./stylesheet.css', import.meta.url), 'utf8');
+assert.match(source, /this\._providers\.box\.add_style_class_name\('aiub-providers-list'\)/);
+assert.match(css, /\.aiub-providers-list \{\s*padding-right: \d+px;/, 'the overlay scrollbar needs its gutter');
+// NEVER would let the list grow past its max-height while a submenu expands.
+assert.match(providers[1], /vscrollbar_policy: St\.PolicyType\.EXTERNAL/);
+assert.doesNotMatch(source, /vscrollbar_policy = [^;]*St\.PolicyType\.(?:NEVER|AUTOMATIC)/,
+    'NEVER ignores max-height; AUTOMATIC flips per frame');
+assert.match(source, /item\.menu\.connect\('open-state-changed', \(\) => this\._holdScrollbar\(\)\)/);
+assert.match(source, /\n {4}_holdScrollbar\(\) \{\n[\s\S]{0,200}?if \(this\._destroyed\)\n {12}return;/);
+assert.match(source, /\n {4}_syncScrollbar\(\) \{[\s\S]*?St\.PolicyType\.ALWAYS : St\.PolicyType\.EXTERNAL;/);
+assert.match(source, /for \(const id of \[[^\]]*this\._settleId\]\)/, 'destroy removes the settle timer');
+
 // "Refresh now" keeps the menu open. A menu action closes it, and so does an
 // item whose activate() emits 'activate', which is what PopupMenu listens for.
 assert.doesNotMatch(source, /addAction\(\s*'Refresh now'/, 'Refresh now must not be a closing menu action');
