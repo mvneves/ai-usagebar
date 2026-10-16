@@ -64,6 +64,7 @@ desktop-test:
 	node gnome-extension/layout.test.mjs
 	node gnome-extension/report-model.test.mjs
 	node gnome-extension/prefs.test.mjs
+	node gnome-extension/refresh.test.mjs
 	node kde-plasmoid/plasmoid-logic.test.mjs
 	node windows/popover/popover.test.mjs
 

@@ -76,13 +76,22 @@ export function elapsedPercent(resetAt, windowSecs, nowMs) {
 
 // `detail` still opens with a "Resets in …" written for CLI readers. The menu
 // draws its own countdown from reset_at, so that fragment would repeat it.
-// Mirrors kde-plasmoid's and omarchy/Model.js's metricDetail.
-export function metricDetail(detail, resetAt) {
+// When the report includes an exact window, refresh its standard pacing text
+// from the same elapsed value as the marker. Leave other provider text alone.
+export function metricDetail(detail, resetAt, percent = null, elapsed = null) {
     let text = clean(detail, 400);
     if (timestampMs(resetAt) === null)
         return text;
     text = text.replace(/^Resets in [^·]+\s*(?:·\s*)?/i, '');
     text = text.replace(/\s*·\s*reset\s+[^·]+$/i, '');
+    if (Number.isFinite(percent) && Number.isFinite(elapsed)) {
+        const delta = percent - elapsed;
+        const pace = delta > 0 ? `${delta}pts ahead`
+            : delta < 0 ? `${-delta}pts under` : 'on track';
+        text = text.replace(
+            /(^| · )\d+% elapsed · (?:\d+pts (?:ahead|under)|on track)(?= · |$)/,
+            `$1${elapsed}% elapsed · ${pace}`);
+    }
     return text.trim();
 }
 
@@ -93,6 +102,7 @@ function metricRow(raw, nowMs) {
         return null;
     const headline = raw.headline === 'value' ? 'value' : 'percent';
     const value = clean(raw.value, 240);
+    const elapsed = elapsedPercent(raw.reset_at, raw.window_secs, nowMs);
     return {
         type: 'metric',
         label: clean(raw.label, 160) || 'Usage',
@@ -101,8 +111,8 @@ function metricRow(raw, nowMs) {
         valueText: headline === 'value' && value ? value : `${percent}%`,
         severity: severityFor(percent, String(raw.severity || '')),
         reset: formatReset(raw.reset_at, nowMs),
-        elapsed: elapsedPercent(raw.reset_at, raw.window_secs, nowMs),
-        detail: metricDetail(raw.detail, raw.reset_at),
+        elapsed,
+        detail: metricDetail(raw.detail, raw.reset_at, percent, elapsed),
         group: clean(raw.group, 80),
     };
 }
@@ -245,4 +255,12 @@ export function refreshRow(updatedMs, busy, nowMs) {
         label: busy ? 'Refreshing…' : 'Refresh now',
         status: updatedText(updatedMs, nowMs),
     };
+}
+
+// Whether opening the menu should fetch. Nothing in hand always does; a
+// `maxAgeSecs` of 0 means every open does, as before this setting existed.
+export function reportOutdated(updatedMs, nowMs, maxAgeSecs) {
+    if (!Number.isFinite(updatedMs))
+        return true;
+    return Number(nowMs) - updatedMs >= Math.max(0, Number(maxAgeSecs) || 0) * 1000;
 }
